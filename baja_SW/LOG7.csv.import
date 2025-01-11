@@ -1,0 +1,17 @@
+[remap]
+
+importer="csv_translation"
+type="Translation"
+uid="uid://bbb3fycq8g71c"
+
+[deps]
+
+files=["res://LOG7.S2.translation", "res://LOG7.S3.translation", "res://LOG7.S4.translation", "res://LOG7.S5.translation", "res://LOG7.S6.translation", "res://LOG7.Time.translation"]
+
+source_file="res://LOG7.csv"
+dest_files=["res://LOG7.S2.translation", "res://LOG7.S3.translation", "res://LOG7.S4.translation", "res://LOG7.S5.translation", "res://LOG7.S6.translation", "res://LOG7.Time.translation"]
+
+[params]
+
+compress=true
+delimiter=0
