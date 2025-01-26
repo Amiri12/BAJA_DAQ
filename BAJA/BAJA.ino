@@ -10,7 +10,7 @@ int Num;
 String fileName;
 int S1, S2, S3, S4, S5, S6; // Analog input values
 float P1, P2, P3, P4, P5, P6; // PWM input pulse widths
-String GPS;
+
 String time;
 
 // Define SoftwareSerial instances for PWM inputs
@@ -20,7 +20,7 @@ SoftwareSerial pwm3(6, -1); // RX on pin 10, TX not used
 SoftwareSerial pwm4(7, -1); // RX on pin 11, TX not used
 SoftwareSerial pwm5(8, -1); // RX on pin 12, TX not used
 SoftwareSerial pwm6(9, -1); // RX on pin 13, TX not used
-SoftwareSerial GPSInfo(3, -1);
+
 
 
 void setup() {
@@ -36,7 +36,7 @@ void setup() {
   pwm4.begin(9600);
   pwm5.begin(9600);
   pwm6.begin(9600);
-  GPSInfo.begin(9600);
+ 
 
   Serial.print("Initializing SD card...");
   digitalWrite(ledPin, HIGH); // Assume SD card initialization failure initially
@@ -56,7 +56,7 @@ void setup() {
 
   myFile = SD.open(fileName, FILE_WRITE);
   if (myFile) {
-    myFile.println("Time, S1, S2, S3, S4, S5, S6, P1, P2, P3, P4, P5, P6, lat, lng, head, speed");
+    myFile.println("Time, S1, S2, S3, S4, S5, S6, P1, P2, P3, P4, P5, P6");
     myFile.close();
   } else {
     Serial.println("Error opening file for writing.");
@@ -85,13 +85,7 @@ void loop() {
   P5 = readPWM(pwm5);
   P6 = readPWM(pwm6);
 
-  // Read GPS data
-  if(GPSInfo.available()){
-    GPS = GPSInfo.readString();
-    GPS.trim();
-  } else {
-    GPS = "-1";
-  }
+
   unsigned long currentTime = millis();
 
   // Buffer data to minimize SD card writes
@@ -124,8 +118,6 @@ void loop() {
       myFile.print(P5);
       myFile.print(",");
       myFile.print(P6);
-      myFile.print(",");
-      myFile.print(GPS);
       myFile.println();
       myFile.close();
     } else {
