@@ -6,10 +6,10 @@
 script = ExtResource("1_yll5f")
 
 [node name="ColorRect" type="ColorRect" parent="."]
-offset_left = 152.0
-offset_top = 8.0
-offset_right = 176.0
-offset_bottom = 128.0
+offset_left = 71.0
+offset_top = 26.0
+offset_right = 95.0
+offset_bottom = 146.0
 color = Color(0, 0.466667, 1, 1)
 
 [node name="HSlider" type="HSlider" parent="."]

@@ -1,40 +1,61 @@
-float rpm;
-unsigned long timeold;
-int out = 0;
-void setup() {
-  // put your setup code here, to run once:
-  Serial.begin(9600);
-  pinMode(3, OUTPUT);
+#include <SoftwareSerial.h>
 
+float rpm1, rpm2;
+unsigned long timeold1, timeold2;
+int out = 0;
+
+SoftwareSerial P1(-1, 3);
+SoftwareSerial P2(-1, 5);
+SoftwareSerial P3(-1, 6);
+SoftwareSerial P4(-1, 7);
+SoftwareSerial P5(-1, 8);
+
+
+void setup() {
+  Serial.begin(9600);
+  P1.begin(9600);
+  P2.begin(9600);
+  P3.begin(9600);
+  P4.begin(9600);
+  P5.begin(9600);
+  pinMode(13, OUTPUT);
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-  
-  static bool lastState = false;
-  bool currentState = analogRead(A6) < 790;
-  int X_Accel = map(anologRead(A2), 0, 1024, 0, 255);
-  int Y_Accel = map(analogRead(A3), 0, 1024, 0, 255);
-  int Z_Accel = map(anaolgRead(A4), 0, 1024, 0, 255);
-  if (currentState && !lastState) {
-    if (analogRead(A6)<790){
-      Serial.println(analogRead(A6));
-      unsigned long currentTime = micros();
-      if (currentTime > timeold) { // Ensure time difference is valid
-        rpm = min(3800,(60000000.0 / (currentTime - timeold)));
-        Serial.print(rpm);
-        Serial.print("\t");
-        Serial.println(out);
-         // Calculate RPM
-        timeold = currentTime; // Update timeold for the next calculation
-      }
+  static bool lastState1 = false;
+  static bool lastState2 = false;
+  bool currentState1 = analogRead(A3) == 0;
+  bool currentState2 = analogRead(A5) < 400;
 
+  int X_Accel = map(analogRead(A2), 438, 295, 1000, -1000);
+  int Y_Accel = map(analogRead(A1), 438, 295, 1000, -1000);
+  int Z_Accel = map(analogRead(A0), 438, 295, 1000, -1000);
+
+  if (currentState1 && !lastState1) {
+    unsigned long currentTime = micros();
+    if (currentTime > timeold1) {
+      digitalWrite(13, HIGH);
+      rpm1 = min(3800, (60000000.0 / (currentTime - timeold1)));
+      timeold1 = currentTime;
     }
   }
   
-  out = map(rpm, 0, 3800, 0, 255);
-  analogWrite(3, out);
-  analogWrite(5, );
-  
-  lastState = currentState;
+  if (currentState2 && !lastState2) {
+    unsigned long currentTime = micros();
+    if (currentTime > timeold2) {
+      rpm2 = min(3800, (60000000.0 / (currentTime - timeold2)));
+      timeold2 = currentTime;
+    }
+  }
+
+
+  P1.println(rpm1);
+  P2.println(rpm2);
+  P3.println(X_Accel);
+  P4.println(Y_Accel);
+  P5.println(Z_Accel);
+  digitalWrite(13, LOW);
+
+  lastState1 = currentState1;
+  lastState2 = currentState2;
 }
