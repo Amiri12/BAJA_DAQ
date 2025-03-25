@@ -1,6 +1,7 @@
-[gd_scene load_steps=2 format=3 uid="uid://btdsegbjrqonp"]
+[gd_scene load_steps=3 format=3 uid="uid://btdsegbjrqonp"]
 
 [ext_resource type="Script" path="res://UI.gd" id="1_yll5f"]
+[ext_resource type="PackedScene" uid="uid://dlwq4kmdb3bhs" path="res://addons/easy_charts/control_charts/chart.tscn" id="2_3iyss"]
 
 [node name="Node2D" type="Node2D"]
 script = ExtResource("1_yll5f")
@@ -36,6 +37,14 @@ offset_left = 96.0
 offset_top = 376.0
 offset_right = 136.0
 offset_bottom = 408.0
+
+[node name="Chart" parent="." instance=ExtResource("2_3iyss")]
+offset_left = 132.0
+offset_top = 5.0
+offset_right = 1086.0
+offset_bottom = 436.0
+grow_horizontal = 2
+grow_vertical = 2
 
 [connection signal="value_changed" from="HSlider" to="." method="_on_h_slider_value_changed"]
 [connection signal="pressed" from="Start" to="." method="_on_button_pressed"]

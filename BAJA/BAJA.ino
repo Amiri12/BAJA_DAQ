@@ -3,7 +3,7 @@
 #include <SoftwareSerial.h>
 
 const int chipSelect = 10;
-const int ledPin = 2; // LED for SD card diagnostics
+const int ledPin = 9; // LED for SD card diagnostics
 File myFile;
 int runNum = 0;
 int Num;
@@ -19,7 +19,7 @@ SoftwareSerial pwm2(5, -1); // RX on pin 9, TX not used
 SoftwareSerial pwm3(6, -1); // RX on pin 10, TX not used
 SoftwareSerial pwm4(7, -1); // RX on pin 11, TX not used
 SoftwareSerial pwm5(8, -1); // RX on pin 12, TX not used
-SoftwareSerial pwm6(9, -1); // RX on pin 13, TX not used
+//SoftwareSerial pwm6(9, -1); // RX on pin 13, TX not used
 
 
 
@@ -35,7 +35,7 @@ void setup() {
   pwm3.begin(9600);
   pwm4.begin(9600);
   pwm5.begin(9600);
-  pwm6.begin(9600);
+  //pwm6.begin(9600);
  
 
   Serial.print("Initializing SD card...");
@@ -56,7 +56,7 @@ void setup() {
 
   myFile = SD.open(fileName, FILE_WRITE);
   if (myFile) {
-    myFile.println("Time, S1, S2, S3, S4, S5, S6, P1, P2, P3, P4, P5, P6");
+    myFile.println("Time, S1, S2, S3, S4, S5, S6, P1, P2, P3, P4, P5");
     myFile.close();
   } else {
     Serial.println("Error opening file for writing.");
@@ -67,7 +67,7 @@ void setup() {
 
 void loop() {
   static unsigned long lastWriteTime = 0;
-  const unsigned long writeInterval = 100; // Write to SD every 100 ms
+  const unsigned long writeInterval = 20; // Write to SD every 100 ms
 
   // Read analog inputs
   S1 = analogRead(A0);
@@ -83,7 +83,7 @@ void loop() {
   P3 = readPWM(pwm3);
   P4 = readPWM(pwm4);
   P5 = readPWM(pwm5);
-  P6 = readPWM(pwm6);
+  //P6 = readPWM(pwm6);
 
 
   unsigned long currentTime = millis();
@@ -116,8 +116,6 @@ void loop() {
       myFile.print(P4);
       myFile.print(",");
       myFile.print(P5);
-      myFile.print(",");
-      myFile.print(P6);
       myFile.println();
       myFile.close();
     } else {
