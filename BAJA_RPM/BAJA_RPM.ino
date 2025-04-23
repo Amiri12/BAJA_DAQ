@@ -1,61 +1,69 @@
 #include <SoftwareSerial.h>
 
-float rpm1, rpm2;
-unsigned long timeold1, timeold2;
-int out = 0;
+// RPM values and timing  
+float        rpm1 = 0, rpm2 = 0;
+unsigned long lastTime1 = 0, lastTime2 = 0;
 
-SoftwareSerial P1(-1, 3);
-SoftwareSerial P2(-1, 5);
-SoftwareSerial P3(-1, 6);
-SoftwareSerial P4(-1, 7);
-SoftwareSerial P5(-1, 8);
+// Two‑zero detection state  
+int   zeros1 = 0, zeros2 = 0;  
+bool  armed1 = true, armed2 = true;
 
+// “TX unused” SoftwareSerial instances  
+SoftwareSerial P1(-1, 3); // send rpm1 on pin 3  
+SoftwareSerial P2(-1, 5); // send rpm2 on pin 5
 
 void setup() {
   Serial.begin(9600);
   P1.begin(9600);
   P2.begin(9600);
-  P3.begin(9600);
-  P4.begin(9600);
-  P5.begin(9600);
   pinMode(13, OUTPUT);
 }
 
 void loop() {
-  static bool lastState1 = false;
-  static bool lastState2 = false;
-  bool currentState1 = analogRead(A3) == 0;
-  bool currentState2 = analogRead(A5) < 400;
+  // 1) read raw analog from your AIM sensors
+  int reading1 = analogRead(A3);  
+  int reading2 = analogRead(A5);
 
-  int X_Accel = map(analogRead(A2), 438, 295, 1000, -1000);
-  int Y_Accel = map(analogRead(A1), 438, 295, 1000, -1000);
-  int Z_Accel = map(analogRead(A0), 438, 295, 1000, -1000);
-
-  if (currentState1 && !lastState1) {
-    unsigned long currentTime = micros();
-    if (currentTime > timeold1) {
-      digitalWrite(13, HIGH);
-      rpm1 = min(3800, (60000000.0 / (currentTime - timeold1)));
-      timeold1 = currentTime;
-    }
+  // 2) SENSOR1: count zeros in a row, re‑arm when non‑zero
+  if (reading1 == 0) {
+    zeros1++;
+  } else {
+    zeros1 = 0;
+    armed1 = true;
   }
-  
-  if (currentState2 && !lastState2) {
-    unsigned long currentTime = micros();
-    if (currentTime > timeold2) {
-      rpm2 = min(3800, (60000000.0 / (currentTime - timeold2)));
-      timeold2 = currentTime;
+  // trigger on two consecutive zeros
+  if (zeros1 >= 2 && armed1) {
+    unsigned long now = micros();
+    if (lastTime1 > 0) {
+      rpm1 = 60000000.0 / (now - lastTime1);
+      rpm1 = min(rpm1, 3800.0);
     }
+    lastTime1 = now;
+    digitalWrite(13, HIGH);
+    armed1 = false;
   }
 
+  // 3) SENSOR2: same two‑zero logic
+  if (reading2 == 0) {
+    zeros2++;
+  } else {
+    zeros2 = 0;
+    armed2 = true;
+  }
+  if (zeros2 >= 2 && armed2) {
+    unsigned long now = micros();
+    if (lastTime2 > 0) {
+      rpm2 = 60000000.0 / (now - lastTime2);
+      rpm2 = min(rpm2, 3800.0);
+    }
+    lastTime2 = now;
+    armed2 = false;
+  }
 
+  // 4) send RPMs over SoftwareSerial
   P1.println(rpm1);
   P2.println(rpm2);
-  P3.println(X_Accel);
-  P4.println(Y_Accel);
-  P5.println(Z_Accel);
-  digitalWrite(13, LOW);
 
-  lastState1 = currentState1;
-  lastState2 = currentState2;
+  // 5) turn off LED after blink
+  digitalWrite(13, LOW);
 }
