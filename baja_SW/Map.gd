@@ -40,6 +40,11 @@ func import_CSV(file_path: String):
 	return col
 
 func build_grad(list: Array):
-	var grad
+	var grad: Array
+	for i in range(0, list.size()):
+		var hue = remap(list[i], list.min(), list.max(), 0, 1)
+		var col = Color.from_hsv(hue, 0.8, 1.0)
+		grad.append(col)
+	
 	
 	return grad
