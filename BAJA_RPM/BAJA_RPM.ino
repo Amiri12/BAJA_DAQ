@@ -10,12 +10,13 @@ bool  armed1 = true, armed2 = true;
 
 // “TX unused” SoftwareSerial instances  
 SoftwareSerial P1(-1, 3); // send rpm1 on pin 3  
-SoftwareSerial P2(-1, 5); // send rpm2 on pin 5
+
+String data;
 
 void setup() {
   Serial.begin(9600);
   P1.begin(9600);
-  P2.begin(9600);
+  
   pinMode(13, OUTPUT);
 }
 
@@ -61,8 +62,11 @@ void loop() {
   }
 
   // 4) send RPMs over SoftwareSerial
-  P1.println(rpm1);
-  P2.println(rpm2);
+  data = String(rpm1, 1);
+  data += ",";
+  data += String(rpm2, 1);
+  P1.println(data);
+  
 
   // 5) turn off LED after blink
   digitalWrite(13, LOW);

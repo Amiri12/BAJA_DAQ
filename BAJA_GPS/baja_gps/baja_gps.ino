@@ -1,31 +1,48 @@
 #include <TinyGPSPlus.h>
 #include <SoftwareSerial.h>
 
-SoftwareSerial GPSData(4,6);
-SoftwareSerial GPSOUT(-1, 9);
-
-String pps = "";
+SoftwareSerial GPSData(4, 6);    // GPS module → RX pin 4
+SoftwareSerial GPSOUT(-1, 9);    // our “virtual TX” out on pin 9
 
 TinyGPSPlus gps;
-void setup() {
-  // put your setup code here, to run once:
-  Serial.begin(9600);
-  GPSData.begin(9600);
-  GPSOUT.begin(9600);
+float  lat, lon;
+double speedMph;
 
+void setup() {
+  Serial.begin(9600);            // for debug
+  GPSData.begin(9600);           // listen to NMEA from GPS
+  GPSOUT.begin(9600);            // send processed string out
 }
 
 void loop() {
-double lat = random(36000, 36999)/1000.000 ;
-double lon = random(-79000, -78000)/1000.000 ;
-double head = random(0, 3590)/10.0 ;
-int speed = random(0,30);
-int alt = random(0,100);
-  // put your main code here, to run repeatedly:
+  // 1) Feed incoming NMEA bytes into TinyGPS++
+  while (GPSData.available()) {
+    gps.encode(GPSData.read());
+  }
 
-  pps = String(lat, 3) + "," + String(lon, 3) + "," +String(head, 1) + "," +String(speed) + "," +String(alt);
-  //pps = "HI";
+  // 2) Extract valid location & speed
+  if (gps.location.isValid()) {
+    lat = gps.location.lat();
+    lon = gps.location.lng();
+  } else {
+    lat = lon = -1;
+  }
+
+  if (gps.speed.isValid()) {
+    speedMph = gps.speed.mph();
+  } else {
+    speedMph = -1;
+  }
+
+  // 3) Build a comma-separated string *without* a trailing comma
+  //    (makes it easier on the master)
+  String pps = String(lat, 6) + "," 
+             + String(lon, 6) + "," 
+             + String(speedMph, 1);
+
+  // 4) Send it out
   GPSOUT.println(pps);
 
-  delay(1000);
+  // (Optionally delay here to match your master’s read rate)
+  //delay(200);
 }
