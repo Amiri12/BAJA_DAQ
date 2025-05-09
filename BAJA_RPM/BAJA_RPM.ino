@@ -22,8 +22,8 @@ void setup() {
 
 void loop() {
   // 1) read raw analog from your AIM sensors
-  int reading1 = analogRead(A3);  
-  int reading2 = analogRead(A5);
+  int reading1 = analogRead(A0);  
+  int reading2 = analogRead(A1);
 
   // 2) SENSOR1: count zeros in a row, re‑arm when non‑zero
   if (reading1 == 0) {

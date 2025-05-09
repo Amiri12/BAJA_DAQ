@@ -3,12 +3,7 @@
 #include <Adafruit_MPU6050.h>
 #include <SD.h>
 #include <EEPROM.h>
-#include <SoftwareSerial.h>           // <— include SoftwareSerial
 
-String rpm_info;
-String GPSdata;
-SoftwareSerial rpmSerial(3, -1);
-SoftwareSerial GPSSerial(4, -1);
 // SD‐card and LED diagnostics
 const int chipSelect = 10;
 const int ledPin     = 9;
@@ -32,8 +27,7 @@ Adafruit_MPU6050 mpu;
 void setup() {
   pinMode(ledPin, OUTPUT);
   Serial.begin(9600);
-  rpmSerial.begin(9600);
-  GPSSerial.begin(9600);
+  while (!Serial);
 
   // — MPU6050 init on hardware I²C (A4=SDA, A5=SCL) —
   Wire.begin();
@@ -54,7 +48,6 @@ void setup() {
   }
   digitalWrite(ledPin, HIGH);
   Serial.println(" done.");
-
   myFile = SD.open(fileName, FILE_WRITE);
   if (myFile) {
     myFile.println(
@@ -62,7 +55,7 @@ void setup() {
       "S1,S2,S3,S4,"
       "AccelX,AccelY,AccelZ,"
       "GyroX,GyroY,GyroZ,"
-      "S7,S8,lat,lon,speed,RPM1,RPM2"       // <— fixed header formatting
+      "S7,S8"
     );
     myFile.close();
   } else {
@@ -96,45 +89,28 @@ void loop() {
   S7 = analogRead(A6);
   S8 = analogRead(A7);
 
-  // 4) Read rpm String with timeout
-  rpm_info = readLine(rpmSerial,100,"NA,NA");
-  GPSdata = readLine(GPSSerial,100,"-1,-1,-1");
-
-  // 5) Throttle and write to SD
+  // 4) Throttle and write to SD
   if (t - lastWriteTime >= writeInterval) {
     lastWriteTime = t;
     myFile = SD.open(fileName, FILE_WRITE);
     if (myFile) {
-      myFile.print(t);        myFile.print(',');
-      myFile.print(S1);       myFile.print(',');
-      myFile.print(S2);       myFile.print(',');
-      myFile.print(S3);       myFile.print(',');
-      myFile.print(S4);       myFile.print(',');
-      myFile.print(AccX, 3);  myFile.print(',');
-      myFile.print(AccY, 3);  myFile.print(',');
-      myFile.print(AccZ, 3);  myFile.print(',');
-      myFile.print(RotX, 3);  myFile.print(',');
-      myFile.print(RotY, 3);  myFile.print(',');
-      myFile.print(RotZ, 3);  myFile.print(',');
-      myFile.print(S7);       myFile.print(',');
-      myFile.print(S8);       myFile.print(',');
-      myFile.print(GPSdata);  myFile.print(',');
-      myFile.println(rpm_info);
+      myFile.print(t);      myFile.print(',');
+      myFile.print(S1);     myFile.print(',');
+      myFile.print(S2);     myFile.print(',');
+      myFile.print(S3);     myFile.print(',');
+      myFile.print(S4);     myFile.print(',');
+      myFile.print(AccX, 3); myFile.print(',');
+      myFile.print(AccY, 3); myFile.print(',');
+      myFile.print(AccZ, 3); myFile.print(',');
+      myFile.print(RotX, 3); myFile.print(',');
+      myFile.print(RotY, 3); myFile.print(',');
+      myFile.print(RotZ, 3); myFile.print(',');
+      myFile.print(S7);     myFile.print(',');
+      myFile.println(S8);
       myFile.close();
     } else {
       Serial.println("SD write error");
       digitalWrite(ledPin, LOW);
     }
   }
-}
-
-// Read up to the next newline, but give up after `timeout` ms
-String readLine(SoftwareSerial &ss, unsigned long timeout, const String &fallback) {
-  unsigned long start = millis();
-  while (ss.available()) ss.read();  // drop stale bytes
-  while (!ss.available() && millis() - start < timeout) { }
-  if (!ss.available()) return fallback;
-  String line = ss.readStringUntil('\n');
-  line.trim();
-  return line;
 }
