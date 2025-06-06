@@ -1,161 +1,127 @@
 #include <EEPROM.h>
-
-/*
-  Mega + USB Host + generic_storage → Log A0/A1 to CSV every 1 s
-  ----------------------------------------------------------------
-  1) Mounts the first FAT16/FAT32 partition on a USB stick
-  2) In setup(): creates (or overwrites) “0:/DATA.CSV” and writes a header:
-       Time_s,Analog0,Analog1
-  3) In loop(): every 1000 ms, appends a new line:
-       <seconds>,<analogRead(A0)>,<analogRead(A1)>
-  4) Closes the file each time to ensure data is flushed
-
-  Required libraries (installed via Library Manager or cloned into Documents/Arduino/libraries/):
-    • USB_Host_Shield_2.0
-    • xmem2                    (for external RAM; generic_storage needs it)
-    • generic_storage (by xxxajk) → Storage.h, PCPartition, FAT…
-    • RTClib                  (only so FAT.cpp’s timestamp calls are satisfied)
-
-  Since we don’t actually care about real dates, we stub out the RTClib calls:
-    – DateTime::DateTime(int32_t)
-    – DateTime::DateTime(time_t)
-    – time_t   DateTime::FatPacked()
-    – DateTime RTCnow()
-
-  That way, FAT.cpp never fails on missing RTC symbols.
-*/
-
-
-#include <RTClib.h>  // pulls in DateTime
-
-// -------------------------------
-// STUB #1: DateTime::DateTime(int32_t)
-// -------------------------------
-DateTime::DateTime(int32_t t) {
-  // no-op
-}
-
-// -------------------------------
-// STUB #2: DateTime::DateTime(time_t)
-// -------------------------------
-DateTime::DateTime(time_t t) {
-  // no-op
-}
-
-// -------------------------------
-// STUB #3: DateTime::FatPacked()
-// -------------------------------
-time_t DateTime::FatPacked() {
-  return (time_t)0;
-}
-
-// -------------------------------
-// STUB #4: RTCnow()
-// -------------------------------
-DateTime RTCnow() {
-  // Force the 32-bit‐int overload; FAT.cpp only needs *something* of type DateTime
-  return DateTime((int32_t)0);
-}
-
-// Now pull in all of the USB/Storage/FAT headers. Our four stubs above satisfy FAT.cpp’s
-// calls to RTCnow(), FatPacked(), and the two DateTime constructors.
+#include <TinyGPSPlus.h>
 
 #include <Usb.h>
 #include <usbhub.h>
-#include <masstorage.h>               // Mass-Storage (MSC)
-#include <Storage.h>                  // generic_storage core
-#include <PCPartition/PCPartition.h>  // partition scanning
-#include <FAT/FAT.h>                  // FatFS API (f_open, f_write, f_close, etc.)
+#include <masstorage.h>
+#include <Storage.h>
+#include <PCPartition/PCPartition.h>
+#include <FAT/FAT.h>
 
-// -----------------------------------------------------------------------------------
-// generic_storage / FAT support variables
-// -----------------------------------------------------------------------------------
-static USB      Usb;                  // USB Host core
-USBHub         Hub1(&Usb);             // only if your shield has a built-in hub
-static PFAT   *Fats[_VOLUMES];         // one PFAT* per logical FAT volume
-static part_t  parts[_VOLUMES];        // partition table entries
-static storage_t sto[_VOLUMES];        // storage callbacks + capacity, etc.
+/*
+  Mega + USB Host + generic_storage → DAQ with RPM + GPS + “heartbeat” LED
 
-static PCPartition *PT;                // for partition enumeration
-static bool    partsready = false;     // true once we detect ≥1 valid LUN
-static bool    fatready  = false;     // true once we successfully mount a PFAT
-static int     cpart     = 0;          // how many partitions we’ve mounted
+  • Mounts the first FAT16/FAT32 partition on a USB stick
+  • In setup(): creates (or overwrites) “0:/DATA.CSV” and writes a header:
+      TIME, SUS1, SUS2, SUS3, SUS4,  ACCL1, ACCL2, ACCL3,  MPH, LAT, LON, RPM1, RPM2
+  • In loop(): every 1000 ms:
+       – sample SUS1–SUS4 (A0–A3), ACCL1–ACCL3 (A4–A6)
+       – read any GPS bytes, update latitude/longitude/speed
+       – latch and reset the interrupt-driven RPM counters for two channels
+       – append one CSV line containing all of the above
+       – flash pin 13 HIGH for 100 ms as a “heartbeat”
+*/
 
-// -----------------------------------------------------------------------------------
-// Helper: check if a partition type byte corresponds to FAT16/FAT32
-// -----------------------------------------------------------------------------------
+// -------------- RTClib stubs so FAT.cpp does not look for an RTC chip  --------------
+//    (We never use real timestamps in the CSV, we log “millis()/1000” ourselves.)
+#include <RTClib.h>
+DateTime::DateTime(int32_t t)  { /* no-op */ }
+DateTime::DateTime(time_t   t)  { /* no-op */ }
+time_t DateTime::FatPacked()  { return (time_t)0; }
+DateTime RTCnow()  { return DateTime((int32_t)0); }
+
+// -------------- TinyGPS++ for parsing GPS NMEA from Serial1  --------------
+TinyGPSPlus gps;
+
+// -------------- SPI / FatFs objects  --------------
+static USB      Usb;
+USBHub         Hub1(&Usb);
+static PFAT   *Fats[_VOLUMES];
+static part_t  parts[_VOLUMES];
+static storage_t sto[_VOLUMES];
+static PCPartition *PT;
+static bool    partsready = false;
+static bool    fatready  = false;
+static int     cpart     = 0;
+
+// -------------- RPM (pulse) inputs  --------------
+//   We assume two sensors wired to digital pins 2 and 3 (INT0, INT1) with pulldown.
+//   Each pulse increments a counter; we debounce edges < 1000 µs apart.
+volatile unsigned int pulse1Count = 0;
+volatile unsigned int pulse2Count = 0;
+volatile unsigned long last1Micros = 0;
+volatile unsigned long last2Micros = 0;
+static const unsigned long DEBOUNCE_US = 1000UL;  // ignore pulses <1 ms apart
+
+// -------------- “Heartbeat” LED  --------------
+static const int HEARTBEAT_LED = 13;
+
+// -------------- Helper: detect if a partition type is FAT16/32  --------------
 bool isfat(uint8_t t) {
   return (t == 0x01 || t == 0x04 || t == 0x06 ||
           t == 0x0B || t == 0x0C || t == 0x0E ||
           t == 0x0F || t == 0x1);
 }
 
+// -------------- Interrupt service routines for RPM  --------------
+void pulse1Detected() {
+  unsigned long now = micros();
+  if (now - last1Micros < DEBOUNCE_US) return;
+  last1Micros = now;
+  pulse1Count++;
+}
 
-char filename[32];
+void pulse2Detected() {
+  unsigned long now = micros();
+  if (now - last2Micros < DEBOUNCE_US) return;
+  last2Micros = now;
+  pulse2Count++;
+}
 
 void setup() {
-    
-    int someNumber = EEPROM.read(0);
-    EEPROM.write(0, someNumber++);
-
-  // 1) Create a char buffer large enough for the path + name + null terminator
-  //    e.g. "0:/LOG_1234.CSV" is 15 chars including null, so pick 32 to be safe.
-  
-
-  // 2) Populate it. snprintf returns the number of bytes written (minus null).
-  //    Format: "0:/PREFIX_%d.CSV"
-  snprintf(filename, sizeof(filename), "0:/LOG_%d.CSV", someNumber);
+  // 1) Start USB/Serial Monitor on pins 0/1 for debugging
   Serial.begin(115200);
-  Serial.print(filename);
-  while (!Serial) { }  // wait for Serial to initialize
+  while (!Serial) { }
 
-  // ------------------------------------------------------------------------
-  // 1) Prepare arrays so we can later mount partitions
-  // ------------------------------------------------------------------------
+  // 2) Configure the “heartbeat” LED
+  pinMode(HEARTBEAT_LED, OUTPUT);
+  digitalWrite(HEARTBEAT_LED, LOW);
+
+  // 3) Configure RPM interrupt‐inputs on pins 2 & 3
+  pinMode(2, INPUT_PULLUP);  // Sensor 1 pulse (INT0)
+  pinMode(3, INPUT_PULLUP);  // Sensor 2 pulse (INT1)
+  attachInterrupt(digitalPinToInterrupt(2), pulse1Detected, RISING);
+  attachInterrupt(digitalPinToInterrupt(3), pulse2Detected, RISING);
+
+  // 4) Start GPS listener on Serial1 (pins 19=RX1, 18=TX1); GPS TX should be wired to RX1
+  Serial1.begin(9600);
+
+  // 5) Initialize USB Host + generic_storage (FatFs) to mount a USB stick
   for (int i = 0; i < _VOLUMES; i++) {
     Fats[i] = nullptr;
-    // Allocate private_data for each storage_t (generic_storage expects a pvt_t*)
     sto[i].private_data = new pvt_t;
-    ((pvt_t *)sto[i].private_data)->B = 255;  // “invalid” until we fill it in
+    ((pvt_t *)sto[i].private_data)->B = 255;
   }
-
-  // ------------------------------------------------------------------------
-  // 2) Initialize generic_storage BEFORE starting USB
-  // ------------------------------------------------------------------------
   Init_Generic_Storage();
 
-  // ------------------------------------------------------------------------
-  // 3) Start USB Host Shield. Retry until it appears.
-  // ------------------------------------------------------------------------
+  // 6) Try to init the Host Shield; keep retrying until it succeeds
   while (Usb.Init(200) == -1) {
-    Serial.println(F("No USB Host Shield detected—retrying..."));
+    Serial.println(F("No USB Host Shield detected—retrying…"));
     delay(500);
   }
   Serial.println(F("USB Host Shield initialized."));
 
-  // ------------------------------------------------------------------------
-  // 4) Poll & mount the first FAT16/32 partition on any plugged-in MSC device
-  // ------------------------------------------------------------------------
+  // 7) Scan for the first FAT16/32 partition, mount it as volume 0
   while (!fatready) {
-    Usb.Task();  // service USB state machine
+    Usb.Task();  // drive the USB state machine
 
-    // Cycle through all possible MSC slots
     for (int B = 0; B < MAX_USB_MS_DRIVERS; B++) {
-      if (UHS_USB_BulkOnly[B]->GetAddress() == 0) {
-        // no device at this index
-        continue;
-      }
-
-      // Found an MSC device at index B. Query its LUNs (logical unit numbers)
+      if (UHS_USB_BulkOnly[B]->GetAddress() == 0) continue;
       int maxLUN = UHS_USB_BulkOnly[B]->GetbMaxLUN();
       for (int lun = 0; lun <= maxLUN; lun++) {
-        if (!UHS_USB_BulkOnly[B]->LUNIsGood(lun)) {
-          continue;
-        }
+        if (!UHS_USB_BulkOnly[B]->LUNIsGood(lun)) continue;
 
-        partsready = true;  // we saw at least one valid LUN
-
-        // Fill in the storage_t callbacks/info for this LUN
+        partsready = true;
         ((pvt_t *)(sto[lun].private_data))->lun = lun;
         ((pvt_t *)(sto[lun].private_data))->B   = B;
         sto[lun].Reads      = *UHS_USB_BulkOnly_Read;
@@ -166,18 +132,15 @@ void setup() {
         sto[lun].TotalSectors = UHS_USB_BulkOnly[B]->GetCapacity(lun);
         sto[lun].SectorSize   = UHS_USB_BulkOnly[B]->GetSectorSize(lun);
 
-        // Attempt to read a partition table on this LUN:
         PT = new PCPartition;
         if (PT->Init(&sto[lun]) == 0) {
-          // Valid MBR—scan up to 4 partitions
+          // If there’s an MBR, scan up to 4 entries for FAT
           for (int pi = 0; pi < 4; pi++) {
             part_t *entry = PT->GetPart(pi);
             if (entry && entry->type != 0x00 && isfat(entry->type)) {
-              // Copy the partition descriptor and attempt to mount via PFAT
               memcpy(&parts[cpart], entry, sizeof(part_t));
               Fats[cpart] = new PFAT(&sto[lun], cpart, parts[cpart].firstSector);
               if (Fats[cpart]->MountStatus()) {
-                // MountStatus()!=0 means “failed to mount”: delete & skip
                 delete Fats[cpart];
                 Fats[cpart] = nullptr;
               } else {
@@ -186,7 +149,7 @@ void setup() {
             }
           }
         } else {
-          // No partition table—try “superfloppy” mode (sector 0 = FAT)
+          // No MBR → superfloppy mode: treat sector 0 as FAT
           Fats[cpart] = new PFAT(&sto[lun], cpart, 0);
           if (Fats[cpart]->MountStatus()) {
             delete Fats[cpart];
@@ -196,23 +159,20 @@ void setup() {
           }
         }
         delete PT;
-      } // for each LUN
-    }   // for each MSC driver index
+      }
+    }
 
     if (partsready && cpart > 0) {
       fatready = true;
-      Serial.println(F("→ FAT partition mounted successfully."));
+      Serial.println(F("→ FAT partition successfully mounted."));
       break;
     }
-  } // while(!fatready)
+  }
 
-  // ------------------------------------------------------------------------
-  // 5) At this point, Fats[0] is the first mounted FAT volume (drive “0:”).
-  //    Create “0:/DATA.CSV” (overwrite), and write a single header row:
-  //       Time_s,Analog0,Analog1
-  // ------------------------------------------------------------------------
+  // 8) At this point, volume “0:” is ready. Create (or overwrite) “0:/DATA.CSV”
+  //    and write a single header line.
   {
-    // Find the FATFS pointer for volume 0
+    // Find the FATFS* for volume 0
     FATFS *fs = nullptr;
     for (int i = 0; i < cpart; i++) {
       if (Fats[i]->volmap == 0) {
@@ -229,98 +189,141 @@ void setup() {
     FRESULT rc;
     UINT   bw;
 
-    // Open or create “0:/DATA.CSV”—use FA_CREATE_ALWAYS to overwrite
-    rc = f_open(&csvFile, filename, FA_WRITE | FA_CREATE_ALWAYS);
+    rc = f_open(&csvFile, "0:/DATA.CSV", FA_CREATE_ALWAYS | FA_WRITE);
     if (rc) {
-      Serial.print(F("f_open failed (header), rc="));
+      Serial.print(F("f_open(header) failed, rc="));
       Serial.println((uint32_t)rc);
       while (1);
     }
+    // Write a header with all the columns we’ll log:
+    const char *header = 
+      "TIME, SUS1, SUS2, SUS3, SUS4,  ACCL1, ACCL2, ACCL3,  MPH, LAT, LON, RPM1, RPM2\r\n";
 
-    // Write the header row
-    // “Time_s” = seconds since Arduino started. “Analog0” = A0, “Analog1” = A1.
-    const char *header = "Time_s,Analog0,Analog1\r\n";
     rc = f_write(&csvFile, header, strlen(header), &bw);
+    f_close(&csvFile);
     if (rc || bw < strlen(header)) {
-      Serial.print(F("f_write(header) failed, rc="));
-      Serial.println((uint32_t)rc);
-      f_close(&csvFile);
-      while (1);
-    }
-
-    // Close the file so header is committed
-    rc = f_close(&csvFile);
-    if (rc) {
-      Serial.print(F("f_close(header) failed, rc="));
+      Serial.print(F("Header write failed, rc="));
       Serial.println((uint32_t)rc);
       while (1);
     }
-
-    Serial.println(F("Header written to DATA.CSV"));
+    Serial.println(F("→ Header written to DATA.CSV"));
   }
-}
+} // end setup()
 
 void loop() {
   static unsigned long lastMillis = 0;
   unsigned long now = millis();
 
-  // Every 1000 ms, append a new line
-  if (now - lastMillis < 1000) return;
-  lastMillis = now;
-
-  // 1) Open the file in “open existing, write-only” mode.
-  //    If it doesn’t exist, print an error (since the header should already be there).
-  FIL    csvFile;
-  FRESULT rc;
-  UINT   bw;
-
-  rc = f_open(&csvFile, filename, FA_OPEN_EXISTING | FA_WRITE);
-  if (rc == FR_NO_FILE) {
-    Serial.println(F("ERROR: DATA.CSV does not exist (did setup() create it?)"));
-    return;
-  }
-  if (rc) {
-    Serial.print(F("ERROR: f_open(append) failed, rc="));
-    Serial.println((uint32_t)rc);
-    return;
+  // -------------- 1) Poll GPS serial and feed bytes to TinyGPS++
+  while (Serial1.available()) {
+    char c = Serial1.read();
+    gps.encode(c);
   }
 
-  // 2) Seek to end-of-file before writing, using f_lseek() + f_size()
-  DWORD fileSize = f_size(&csvFile);    // current length of file
-  rc = f_lseek(&csvFile, fileSize);     // move file pointer to exactly fileSize
-  if (rc) {
-    Serial.print(F("ERROR: f_lseek to end failed, rc="));
-    Serial.println((uint32_t)rc);
-    f_close(&csvFile);
-    return;
-  }
+  // -------------- 2) Once per second, build + append one CSV line
+  if (now - lastMillis >= 250) {
+    lastMillis = now;
 
-  // 3) Build one CSV line: "<seconds>,<A0>,<A1>\r\n"
-  char         lineBuf[64];
-  unsigned long sec  = now / 1000;       // seconds since Arduino start
-  int           valA0 = analogRead(A0);
-  int           valA1 = analogRead(A1);
-  int           len   = snprintf(lineBuf, sizeof(lineBuf),
-                                 "%lu,%d,%d\r\n", sec, valA0, valA1);
+    // 2a) Sample the four suspension sensors (A0–A3)
+    int sus1 = analogRead(A0);
+    int sus2 = analogRead(A1);
+    int sus3 = analogRead(A2);
+    int sus4 = analogRead(A3);
 
-  rc = f_write(&csvFile, lineBuf, len, &bw);
-  if (rc || bw < (UINT)len) {
-    Serial.print(F("ERROR: f_write failed, rc="));
-    Serial.println((uint32_t)rc);
-    f_close(&csvFile);
-    return;
-  }
+    // 2b) Sample the three accelerometers (A4–A6)
+    int accl1 = analogRead(A4);
+    int accl2 = analogRead(A5);
+    int accl3 = analogRead(A6);
 
-  // 4) Close so that everything actually gets flushed to the stick
-  rc = f_close(&csvFile);
-  if (rc) {
-    Serial.print(F("ERROR: f_close failed, rc="));
-    Serial.println((uint32_t)rc);
-    return;
-  }
+    // 2c) Extract GPS‐derived speed, latitude, longitude if a new fix is available
+    double lat = 0.0, lon = 0.0, mph = 0.0;
+    if (gps.location.isUpdated()) {
+      lat = gps.location.lat();
+      lon = gps.location.lng();
+      mph = gps.speed.mph();
+    }
 
-  // 5) Debug print to Serial
-  Serial.print(F("Appended: "));
-  Serial.print(lineBuf);
-}
+    // 2d) Calculate RPMs from the interrupt counters.
+    //     Each “pulseCount” has been counting edges since the last loop.
+    //     We do “/2” if your sensor produces two edges per revolution;
+    //     multiply by 60 to get rev/min, then by 1 (since 1 s elapsed).
+    unsigned int count1 = pulse1Count;
+    unsigned int count2 = pulse2Count;
+    pulse1Count = 0;
+    pulse2Count = 0;
 
+    // Example: if your pickup gives one rising edge per half‐revolution,
+    // then (count1/2)*60 = RPM. Adjust “/2” if your sensor is different.
+    double rpm1 = (count1 / 2.0) * 60.0;
+    double rpm2 = (count2 / 2.0) * 60.0;
+
+    // 2e) Open “0:/DATA.CSV”, seek to end, and append one line
+    {
+      FIL    csvFile;
+      FRESULT rc;
+      UINT   bw;
+
+      rc = f_open(&csvFile, "0:/DATA.CSV", FA_OPEN_EXISTING | FA_WRITE);
+      if (rc == FR_NO_FILE) {
+        // (If somehow the file vanished, you could recreate header here.
+        // But for now just bail.)
+        Serial.println(F("ERROR: DATA.CSV missing!"));
+        return;
+      }
+      if (rc) {
+        Serial.print(F("ERROR: f_open(append) failed, rc="));
+        Serial.println((uint32_t)rc);
+        return;
+      }
+
+      // Seek to EOF
+      DWORD fileSize = f_size(&csvFile);
+      rc = f_lseek(&csvFile, fileSize);
+      if (rc) {
+        Serial.print(F("ERROR: f_lseek to EOF failed, rc="));
+        Serial.println((uint32_t)rc);
+        f_close(&csvFile);
+        return;
+      }
+
+      // Build a single CSV‐formatted line with all 13 fields:
+      //   TIME, SUS1, SUS2, SUS3, SUS4,  ACCL1, ACCL2, ACCL3,  MPH, LAT, LON, RPM1, RPM2
+      char lineBuf[128];
+      int len = snprintf(lineBuf, sizeof(lineBuf),
+        "%8lu, %4d, %4d, %4d, %4d,   %4d, %4d, %4d,   %5.1f,  %9.6f, %9.6f,  %.1f,  %.1f\r\n",
+        now / 1000.0,  // TIME in seconds
+        sus1, sus2, sus3, sus4,
+        accl1, accl2, accl3,
+        mph,
+        lat,
+        lon,
+        rpm1,
+        rpm2
+      );
+
+      // Write the full line
+      rc = f_write(&csvFile, lineBuf, len, &bw);
+      Serial.print(F("→ "));
+      Serial.print(lineBuf);  // also echo to USB Serial Monitor
+      if (rc || bw < (UINT)len) {
+        Serial.print(F("ERROR: f_write failed, rc="));
+        Serial.println((uint32_t)rc);
+        f_close(&csvFile);
+        return;
+      }
+
+      // Close (flush to disk)
+      rc = f_close(&csvFile);
+      if (rc) {
+        Serial.print(F("ERROR: f_close failed, rc="));
+        Serial.println((uint32_t)rc);
+        return;
+      }
+
+      // 2f) Blink the LED as a “heartbeat” indicator (turn on 100 ms)
+      digitalWrite(HEARTBEAT_LED, HIGH);
+      delay(20);
+      digitalWrite(HEARTBEAT_LED, LOW);
+    }
+  } // end “if (1 s elapsed)”
+} // end loop()
